@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simple-microservice
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: simple-microservice
+  template:
+    metadata:
+      labels:
+        app: simple-microservice
+    spec:
+      containers:
+        - name: simple-microservice
+          image: swymbnsl/microservice:latest
+          imagePullPolicy: Never # Use local images
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
