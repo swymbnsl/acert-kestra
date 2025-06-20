@@ -1,0 +1,100 @@
+id: microservice-chaos-test
+namespace: chaos-testing
+
+tasks:
+  - id: check_dockerfile
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - |
+        cd /home/swayam/Desktop/Kestra/sample-microservice
+        if [ ! -f Dockerfile ]; then
+          echo "Dockerfile not found"
+          exit 1
+        fi
+        echo "Dockerfile exists"
+
+  - id: build_docker_image
+    type: io.kestra.plugin.scripts.shell.Commands
+    timeout: PT30M
+    commands:
+      - cd /home/swayam/Desktop/Kestra/sample-microservice
+      - docker build -t sample-microservice:latest .
+
+  - id: deploy_to_k8s
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - cd /home/swayam/Desktop/Kestra/sample-microservice
+      - kubectl create namespace sample-app --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/deployment.yaml
+      - kubectl apply -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/service.yaml
+      - |
+        echo "Waiting for pods to be ready..."
+        kubectl wait --for=condition=ready pod -l app=sample-microservice -n sample-app --timeout=120s
+
+  - id: verify_deployment
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - |
+        READY=$(kubectl get pods -n sample-app -l app=sample-microservice -o jsonpath='{.items[0].status.containerStatuses[0].ready}')
+        if [ "$READY" != "true" ]; then
+          echo "Deployment not ready"
+          exit 1
+        fi
+        echo "Deployment verified successfully"
+
+  - id: run_chaos_tests
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - cd /home/swayam/Desktop/Kestra
+      - |
+        # Start monitoring in background
+        ./scripts/chaos-monitor.sh &
+        sleep 30
+
+        # Run chaos tests
+        ./manual-chaos-test/manual-acert-testing.sh
+
+        # Store the exit code
+        TEST_EXIT=$?
+
+        if [ $TEST_EXIT -ne 0 ]; then
+          echo "Chaos tests failed"
+          exit 1
+        fi
+
+  - id: evaluate_results
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - cd /home/swayam/Desktop/Kestra
+      - |
+        # Run scoring script and capture output
+        OUTPUT=$(./scripts/chaos-scoring.sh)
+        EXIT_CODE=$?
+
+        echo "$OUTPUT"
+
+        if [ $EXIT_CODE -eq 0 ]; then
+          echo '::{"outputs":{"test_status":"passed","details":"All tests passed successfully"}}::'
+        else
+          FAILED_TESTS=$(echo "$OUTPUT" | grep "❌ Tests failed" -A 10)
+          echo '::{"outputs":{"test_status":"failed","details":"'"$FAILED_TESTS"'"}}::'
+          exit 1
+        fi
+
+  - id: cleanup
+    type: io.kestra.plugin.scripts.shell.Commands
+    commands:
+      - cd /home/swayam/Desktop/Kestra
+      - ./scripts/stop-all-tests.sh || true
+      - kubectl delete -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/deployment.yaml --ignore-not-found=true
+      - kubectl delete -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/service.yaml --ignore-not-found=true
+      - kubectl delete -f /home/swayam/Desktop/Kestra/scripts/stop-all-pods-services.yaml --ignore-not-found=true
+    allowFailure: true
+
+outputs:
+  - id: test_status
+    value: "{{ outputs.evaluate_results.vars.test_status }}"
+    type: STRING
+  - id: details
+    value: "{{ outputs.evaluate_results.vars.details }}"
+    type: STRING

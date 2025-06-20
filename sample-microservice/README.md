@@ -22,51 +22,100 @@ npm install
 npm start
 ```
 
-### 2. Kubernetes Deployment
+### 2. Docker Setup
 
 ```bash
+# Create Dockerfile if not exists
+cat > Dockerfile << EOF
+FROM node:14-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "start"]
+EOF
+
 # Build Docker image
 docker build -t sample-microservice:latest .
 
-# Deploy to Kubernetes
-kubectl apply -f k8s/
+# Test the image locally
+docker run -p 3000:3000 sample-microservice:latest
+```
+
+### 3. Kubernetes Deployment
+
+```bash
+# Create namespace if not exists
+kubectl create namespace sample-app
+
+# Deploy the application
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
 
 # Verify deployment
-kubectl get pods -l app=sample-microservice
-kubectl get svc sample-microservice
+kubectl get pods -n sample-app -l app=sample-microservice
+kubectl get svc -n sample-app sample-microservice
+
+# Wait for pods to be ready
+kubectl wait --for=condition=ready pod -l app=sample-microservice -n sample-app --timeout=120s
 ```
 
-### 3. Chaos Testing Setup
-
-1. Install Chaos Mesh:
+### 4. Chaos Mesh Setup
 
 ```bash
+# Install Chaos Mesh
 curl -sSL https://mirrors.chaos-mesh.org/v2.5.1/install.sh | bash
-```
 
-2. Verify installation:
-
-```bash
+# Verify installation
 kubectl get pods -n chaos-testing
+
+# Configure RBAC for Chaos Mesh
+kubectl apply -f k8s/chaos-rbac.yaml
 ```
 
-### 4. Running Chaos Tests
+### 5. Running Chaos Tests
 
 ```bash
-# Start monitoring
+# Start monitoring in a separate terminal
 ./scripts/chaos-monitor.sh
 
-# Run chaos tests
+# Wait for monitoring to initialize (about 30 seconds)
+sleep 30
+
+# Run the chaos tests
 ./manual-chaos-test/manual-acert-testing.sh
 
-# Stop all tests
-./scripts/stop-all-tests.sh
+# View real-time metrics during the test
+kubectl logs -f -n chaos-testing $(kubectl get pods -n chaos-testing -l app=chaos-monitor -o jsonpath='{.items[0].metadata.name}')
 ```
 
-### 5. Cleanup
+### 6. Chaos Scoring
 
 ```bash
-kubectl apply -f scripts/stop-all-pods-services.yaml
+# Generate chaos test scores
+./scripts/chaos-scoring.sh
+
+# View the scoring report
+cat ./reports/chaos-score-report.txt
+```
+
+### 7. Cleanup
+
+```bash
+# Stop all chaos experiments
+./scripts/stop-all-tests.sh
+
+# Remove application and services
+kubectl delete -f k8s/deployment.yaml
+kubectl delete -f k8s/service.yaml
+
+# Remove monitoring resources
+kubectl delete -f scripts/stop-all-pods-services.yaml
+
+# Optional: Uninstall Chaos Mesh
+helm uninstall chaos-mesh -n chaos-testing
+kubectl delete namespace chaos-testing
 ```
 
 ## Architecture
@@ -74,7 +123,6 @@ kubectl apply -f scripts/stop-all-pods-services.yaml
 The service exposes a REST API on port 3000 with the following endpoints:
 
 - GET /health - Health check endpoint
-- GET /metrics - Basic metrics endpoint
 
 ## Monitoring
 
@@ -84,3 +132,12 @@ Use chaos-monitor.sh to track:
 - Response times
 - Pod count
 - Resource usage
+
+## Test Reports
+
+Chaos test reports are generated in the `./reports` directory and include:
+
+- Test execution logs
+- Metrics data
+- Chaos score analysis
+- Resilience recommendations
