@@ -1,44 +1,86 @@
-# Simple Microservice
+# Simple Microservice with Chaos Testing
 
-A basic Node.js microservice with Kubernetes deployment configuration.
+A basic Node.js microservice with Kubernetes deployment and chaos testing configuration.
 
-## Building and Running Locally
+## Prerequisites
 
-1. Install dependencies:
+- Node.js 14+
+- Docker
+- Kubernetes cluster
+- Chaos Mesh installed
+- kubectl configured
+
+## Setup Steps
+
+### 1. Local Development
 
 ```bash
+# Install dependencies
 npm install
-```
 
-2. Run the service:
-
-```bash
+# Run locally
 npm start
 ```
 
-## Building and Deploying to Kubernetes
-
-1. Build the Docker image:
+### 2. Kubernetes Deployment
 
 ```bash
+# Build Docker image
 docker build -t sample-microservice:latest .
-```
 
-2. Deploy to Kubernetes:
-
-```bash
+# Deploy to Kubernetes
 kubectl apply -f k8s/
-```
 
-3. Verify deployment:
-
-```bash
-kubectl get pods
-kubectl get services
-```
-
-The service will be available through the NodePort service. Get the port with:
-
-```bash
+# Verify deployment
+kubectl get pods -l app=sample-microservice
 kubectl get svc sample-microservice
 ```
+
+### 3. Chaos Testing Setup
+
+1. Install Chaos Mesh:
+
+```bash
+curl -sSL https://mirrors.chaos-mesh.org/v2.5.1/install.sh | bash
+```
+
+2. Verify installation:
+
+```bash
+kubectl get pods -n chaos-testing
+```
+
+### 4. Running Chaos Tests
+
+```bash
+# Start monitoring
+./scripts/chaos-monitor.sh
+
+# Run chaos tests
+./manual-chaos-test/manual-acert-testing.sh
+
+# Stop all tests
+./scripts/stop-all-tests.sh
+```
+
+### 5. Cleanup
+
+```bash
+kubectl apply -f scripts/stop-all-pods-services.yaml
+```
+
+## Architecture
+
+The service exposes a REST API on port 3000 with the following endpoints:
+
+- GET /health - Health check endpoint
+- GET /metrics - Basic metrics endpoint
+
+## Monitoring
+
+Use chaos-monitor.sh to track:
+
+- HTTP response status
+- Response times
+- Pod count
+- Resource usage
