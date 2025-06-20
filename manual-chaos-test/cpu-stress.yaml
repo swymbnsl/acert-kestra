@@ -1,0 +1,18 @@
+# cpu-stress.yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-test
+  namespace: default
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      "app": "sample-microservice"
+  duration: "1m"
+  stressors:
+    cpu:
+      workers: 1
+      load: 80

@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: simple-microservice
+  name: sample-microservice
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: simple-microservice
+      app: sample-microservice
   template:
     metadata:
       labels:
-        app: simple-microservice
+        app: sample-microservice
     spec:
       containers:
-        - name: simple-microservice
-          image: swymbnsl/microservice:latest
-          imagePullPolicy: Never # Use local images
+        - name: sample-microservice
+          image: sample-microservice:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
           readinessProbe:

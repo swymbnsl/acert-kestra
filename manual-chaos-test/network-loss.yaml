@@ -1,0 +1,18 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-loss-test
+  namespace: default
+spec:
+  action: loss
+  mode: one
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      "app": "sample-microservice"
+  loss:
+    loss: "25"
+    correlation: "100"
+  duration: "1m"
+  direction: to

@@ -1,5 +1,5 @@
 {
-  "name": "simple-microservice",
+  "name": "sample-microservice",
   "version": "1.0.0",
   "main": "src/app.js",
   "scripts": {

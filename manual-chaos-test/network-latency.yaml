@@ -1,0 +1,19 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-latency-test
+  namespace: default
+spec:
+  action: delay
+  mode: one
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      "app": "sample-microservice"
+  delay:
+    latency: "5000ms"
+    correlation: "100"
+    jitter: "0ms"
+  duration: "1m"
+  direction: to

@@ -21,7 +21,7 @@ npm start
 1. Build the Docker image:
 
 ```bash
-docker build -t simple-microservice:1.0.0 .
+docker build -t sample-microservice:latest .
 ```
 
 2. Deploy to Kubernetes:
@@ -40,5 +40,5 @@ kubectl get services
 The service will be available through the NodePort service. Get the port with:
 
 ```bash
-kubectl get svc simple-microservice
+kubectl get svc sample-microservice
 ```
