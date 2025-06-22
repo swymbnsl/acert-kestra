@@ -24,6 +24,7 @@ inputs:
     type: STRING
     required: false
     description: "Value for chaos mode when using fixed or percentage modes"
+    defaults: "1"
   - id: tests_duration
     type: STRING
     required: true
@@ -64,7 +65,7 @@ inputs:
     type: STRING
     required: false
     description: "Application URL for load testing"
-    defaults: "http://sample.local/"
+
   - id: artillery_arrival_rate
     type: INT
     required: false
@@ -72,36 +73,6 @@ inputs:
     defaults: 10
 
 tasks:
-  # Run baseline artillery test before chaos
-  - id: baseline_artillery_test
-    type: io.kestra.plugin.docker.Run
-    containerImage: swymbnsl/artillery-runner:slim
-    inputFiles:
-      artillery-config.yml: |
-        config:
-          target: "http://sample-microservice:3000"
-          phases:
-            - duration: {{ inputs.tests_duration }}
-              arrivalRate: {{ inputs.artillery_arrival_rate }}
-          plugins:
-            metrics-by-endpoint: {}
-        scenarios:
-          - flow:
-              - get:
-                  url: "/"
-    credentials:
-      username: "{{ inputs.docker_hub_username }}"
-      password: "{{ inputs.docker_hub_password }}"
-
-    commands:
-      - artillery
-      - run
-      - artillery-config.yml
-      - --output
-      - baseline-results.json
-    outputFiles:
-      - baseline-results.json
-
   - id: validate_chaos_type
     type: io.kestra.plugin.core.flow.Switch
     value: "{{ inputs.chaos_type }}"
@@ -133,13 +104,13 @@ tasks:
           type: io.kestra.plugin.core.flow.Sleep
           duration: "PT5S"
 
-        - id: cpu_stress_artillery_test
+        - id: run_artillery_test_cpu
           type: io.kestra.plugin.docker.Run
           containerImage: swymbnsl/artillery-runner:slim
           inputFiles:
             artillery-config.yml: |
               config:
-                target: "http://sample-microservice:3000"
+                target: "{{ inputs.app_url }}"
                 phases:
                   - duration: {{ inputs.tests_duration }}
                     arrivalRate: {{ inputs.artillery_arrival_rate }}
@@ -157,9 +128,9 @@ tasks:
             - run
             - artillery-config.yml
             - --output
-            - cpu-stress-results.json
+            - test-results.json
           outputFiles:
-            - cpu-stress-results.json
+            - test-results.json
 
       memory_stress:
         - id: inject_memory_stress
@@ -188,13 +159,13 @@ tasks:
           type: io.kestra.plugin.core.flow.Sleep
           duration: "PT5S"
 
-        - id: memory_stress_artillery_test
+        - id: run_artillery_test_memory
           type: io.kestra.plugin.docker.Run
           containerImage: swymbnsl/artillery-runner:slim
           inputFiles:
             artillery-config.yml: |
               config:
-                target: "http://sample-microservice:3000"
+                target: "{{ inputs.app_url }}"
                 phases:
                   - duration: {{ inputs.tests_duration }}
                     arrivalRate: {{ inputs.artillery_arrival_rate }}
@@ -212,9 +183,9 @@ tasks:
             - run
             - artillery-config.yml
             - --output
-            - memory-stress-results.json
+            - test-results.json
           outputFiles:
-            - memory-stress-results.json
+            - test-results.json
 
       network_latency:
         - id: inject_network_latency
@@ -246,13 +217,13 @@ tasks:
           type: io.kestra.plugin.core.flow.Sleep
           duration: "PT5S"
 
-        - id: network_latency_artillery_test
+        - id: run_artillery_test_network_latency
           type: io.kestra.plugin.docker.Run
           containerImage: swymbnsl/artillery-runner:slim
           inputFiles:
             artillery-config.yml: |
               config:
-                target: "http://sample-microservice:3000"
+                target: "{{ inputs.app_url }}"
                 phases:
                   - duration: {{ inputs.tests_duration }}
                     arrivalRate: {{ inputs.artillery_arrival_rate }}
@@ -270,9 +241,9 @@ tasks:
             - run
             - artillery-config.yml
             - --output
-            - network-latency-results.json
+            - test-results.json
           outputFiles:
-            - network-latency-results.json
+            - test-results.json
 
       network_loss:
         - id: inject_network_loss
@@ -303,13 +274,13 @@ tasks:
           type: io.kestra.plugin.core.flow.Sleep
           duration: "PT5S"
 
-        - id: network_loss_artillery_test
+        - id: run_artillery_test_network_loss
           type: io.kestra.plugin.docker.Run
           containerImage: swymbnsl/artillery-runner:slim
           inputFiles:
             artillery-config.yml: |
               config:
-                target: "http://sample-microservice:3000"
+                target: "{{ inputs.app_url }}"
                 phases:
                   - duration: {{ inputs.tests_duration }}
                     arrivalRate: {{ inputs.artillery_arrival_rate }}
@@ -327,9 +298,9 @@ tasks:
             - run
             - artillery-config.yml
             - --output
-            - network-loss-results.json
+            - test-results.json
           outputFiles:
-            - network-loss-results.json
+            - test-results.json
 
       pod_kill:
         - id: inject_pod_chaos
@@ -356,13 +327,13 @@ tasks:
           type: io.kestra.plugin.core.flow.Sleep
           duration: "PT5S"
 
-        - id: pod_kill_artillery_test
+        - id: run_artillery_test_pod_kill
           type: io.kestra.plugin.docker.Run
           containerImage: swymbnsl/artillery-runner:slim
           inputFiles:
             artillery-config.yml: |
               config:
-                target: "http://sample-microservice:3000"
+                target: "{{ inputs.app_url }}"
                 phases:
                   - duration: {{ inputs.tests_duration }}
                     arrivalRate: {{ inputs.artillery_arrival_rate }}
@@ -380,9 +351,9 @@ tasks:
             - run
             - artillery-config.yml
             - --output
-            - pod-kill-results.json
+            - test-results.json
           outputFiles:
-            - pod-kill-results.json
+            - test-results.json
 
     defaults:
       - id: shell_script_task
@@ -397,9 +368,9 @@ tasks:
     duration: "PT{{ inputs.tests_duration }}S"
 
 outputs:
-  - id: "result"
+  - id: chaos_test_result
     type: FILE
-    value: "{{ outputs['pod_kill_artillery_test']['outputFiles']['pod-kill-results.json'] }}"
-  - id: baseline_results
-    type: FILE
-    value: "{{ outputs['baseline_artillery_test']['outputFiles']['baseline-results.json'] }}"
+    value: "{{ outputs['run_artillery_test_' + inputs.chaos_type]['outputFiles']['test-results.json'] }}"
+  - id: chaos_type_tested
+    type: STRING
+    value: "{{ inputs.chaos_type }}"

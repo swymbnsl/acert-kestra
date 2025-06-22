@@ -5,7 +5,7 @@
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-Native-blue)](https://kubernetes.io)
 [![Chaos Mesh](https://img.shields.io/badge/Chaos%20Mesh-Powered-red)](https://chaos-mesh.org)
 
-![alt text](vue-flow-screenshot-1750608578232.png)
+![alt text](vue-flow-screenshot-1751040694078.jpeg)
 
 ## 📋 Table of Contents
 
@@ -171,6 +171,18 @@ The tool consists of two main workflows:
 - **fixed**: Target specific number of pods
 - **fixed-percent**: Target percentage of pods
 - **random-max-percent**: Random percentage up to maximum
+
+## Pre req. setup
+
+### 1. On your host machine, run the following command to grant permissions to the default service account
+
+```bash
+kubectl create clusterrolebinding default-admin --clusterrole=cluster-admin --serviceaccount=default:default
+```
+
+### 2. Install and run chaos mesh on your host machine:
+
+https://chaos-mesh.org/docs/production-installation-using-helm/
 
 ## 🚀 Usage
 

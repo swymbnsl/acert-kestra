@@ -12,7 +12,6 @@ inputs:
     type: STRING
     required: true
     description: "GitHub repository URL (e.g. https://github.com/user/repo.git)"
-    defaults: https://github.com/swymbnsl/test-microservice.git
 
   - id: docker_hub_username
     type: STRING
@@ -101,7 +100,7 @@ inputs:
   - id: cpu_workers
     type: INT
     required: false
-    description: "Number of CPU Stress workers"
+    description: "Number of CPU stress workers"
     defaults: 1
     dependsOn:
       inputs:
@@ -138,7 +137,16 @@ inputs:
   - id: chaos_mode_value
     type: STRING
     required: false
-    description: "Enter Chaos mode value.\nNot applicable for **one** and **all**.\nFor **fixed**: no of pods.\nFor **fixed-percentage**: percentage of pods.\nFor **random-max-percent**: provide a max percentage value to be randomly selected"
+    defaults: 1
+    description: "Enter Chaos mode value.
+
+      Not applicable for **one** and **all**.
+
+      For **fixed**: no of pods.
+
+      For **fixed-percentage**: percentage of pods.
+
+      For **random-max-percent**: provide a max percentage value to be randomly selected"
     dependsOn:
       inputs:
         - chaos_mode
@@ -155,6 +163,12 @@ inputs:
     required: false
     description: "Maximum acceptable response time in ms"
     defaults: 500
+
+  - id: app_url
+    type: STRING
+    required: false
+    description: "Application URL for load testing http://<node-ip>:3000"
+    defaults: http://10.104.238.108:3000/
 
   - id: arrival_rate
     type: INT
@@ -236,6 +250,40 @@ tasks:
             selector:
               app: sample-microservice
 
+  # Wait for deployment to be ready
+  - id: wait_for_deployment
+    type: io.kestra.plugin.core.flow.Sleep
+    duration: "PT30S"
+
+  # Run baseline test before chaos experiments
+  - id: baseline_artillery_test
+    type: io.kestra.plugin.docker.Run
+    containerImage: swymbnsl/artillery-runner:slim
+    inputFiles:
+      artillery-config.yml: |
+        config:
+          target: "http://sample-microservice:3000"
+          phases:
+            - duration: {{ inputs.tests_duration }}
+              arrivalRate: {{ inputs.arrival_rate }}
+          plugins:
+            metrics-by-endpoint: {}
+        scenarios:
+          - flow:
+              - get:
+                  url: "/"
+    credentials:
+      username: "{{ inputs.docker_hub_username }}"
+      password: "{{ inputs.docker_hub_password }}"
+    commands:
+      - artillery
+      - run
+      - artillery-config.yml
+      - --output
+      - baseline-results.json
+    outputFiles:
+      - baseline-results.json
+
   - id: run_each_chaos_test
     type: io.kestra.plugin.core.flow.ForEach
     values: "{{inputs.chaos_test}}"
@@ -248,6 +296,8 @@ tasks:
           chaos_type: "{{ taskrun.value }}"
           chaos_mode: "{{ inputs.chaos_mode }}"
           chaos_mode_value: "{{ inputs.chaos_mode_value }}"
+          docker_hub_password: "{{ inputs.docker_hub_password }}"
+          docker_hub_username: "{{ inputs.docker_hub_username }}"
           tests_duration: "{{ inputs.tests_duration  }}"
           cpu_workers: "{{ inputs.cpu_workers }}"
           cpu_load: "{{ inputs.cpu_load }}"
@@ -258,115 +308,132 @@ tasks:
           network_loss_percent: "{{ inputs.network_loss_percent }}"
           correlation: "{{ inputs.correlation }}"
           artillery_arrival_rate: "{{ inputs.arrival_rate }}"
+          app_url: "{{ inputs.app_url }}"
 
-  - id: evaluate_chaos_results
-    type: io.kestra.plugin.scripts.shell.Commands
-    containerImage: alpine:latest
-    inputFiles: |
-      "{{ outputs.call_general_chaos_sublflow.outputs.file }}"
-      "{{ outputs.call_general_chaos_sublflow.outputs.file2 }}"
-    taskRunner:
-      type: io.kestra.plugin.scripts.runner.docker.Docker
-      cpu:
-        cpus: 1
+  - id: analyze_chaos_results
+    type: io.kestra.plugin.scripts.node.Script
     beforeCommands:
-      - apk add --no-cache jq bc
-    commands:
-      - |
-        echo "📊 A-CERT Chaos Test Results Analysis"
-        echo "====================================="
+      - npm i @kestra-io/libs
 
-        THRESHOLD_RESPONSE_TIME="{{ inputs.threshold_response_time | default(500) }}"
-        THRESHOLD_ERROR_RATE="{{ inputs.threshold_error_rate | default(0.05) }}"
+    script: |
+      const fs = require('fs');
+      const path = require('path');
+      const Kestra = require('@kestra-io/libs');
 
-        approved=true
-        failed_tests=""
 
-        result_files="baseline-results.json cpu-stress-results.json memory-stress-results.json network-latency-results.json network-loss-results.json pod-kill-results.json"
+      const THRESHOLD_RESPONSE_TIME = {{ inputs.threshold_response_time }}
+      const THRESHOLD_ERROR_RATE = {{ inputs.threshold_error_rate}}
 
-        for file in $result_files; do
-            if [ ! -f "$file" ]; then
-                echo "⚠️  Skipping missing file: $file"
-                continue
-            fi
+      const outputsFile = {{ outputs.call_general_chaos_sublflow }}
+      console.log("OUTPUT FILE:", outputsFile)
 
-            test_name=$(basename "$file" .json)
+      let approved = true;
+      let failedTests = [];
+      const resultFiles = []
+      const testNames = []
 
-            avg_rt=$(jq -r '.aggregate.summaries."http.response_time".mean // 0' "$file")
-            p95_rt=$(jq -r '.aggregate.summaries."http.response_time".p95 // 0' "$file")
-            p99_rt=$(jq -r '.aggregate.summaries."http.response_time".p99 // 0' "$file")
+      for (const key in outputsFile) {
+        resultFiles.push(outputsFile[key].outputs.chaos_test_result)
+      }
+      for (const key in outputsFile) {
+        testNames.push(outputsFile[key].outputs.chaos_type_tested)
+      }
 
-            timeout_errors=$(jq -r '.aggregate.counters."errors.ETIMEDOUT" // 0' "$file")
-            total_requests=$(jq -r '.aggregate.counters."http.requests" // 0' "$file")
-            successful_responses=$(jq -r '.aggregate.counters."http.responses" // 0' "$file")
-            failed_users=$(jq -r '.aggregate.counters."vusers.failed" // 0' "$file")
 
-            if [ "$total_requests" -gt 0 ]; then
-                error_rate=$(echo "scale=6; $timeout_errors / $total_requests" | bc)
-                success_rate=$(echo "scale=2; $successful_responses * 100 / $total_requests" | bc)
-            else
-                error_rate="0.000000"
-                success_rate="0.00"
-            fi
+      console.log('📊 A-CERT Chaos Test Results Analysis');
+      console.log('=====================================');
 
-            echo "📄 Test: $test_name"
-            echo "   ➤ Total Requests: $total_requests"
-            echo "   ➤ Successful Responses: $successful_responses"
-            echo "   ➤ Failed Users: $failed_users"
-            echo "   ➤ Timeout Errors: $timeout_errors"
-            echo "   ➤ Success Rate: ${success_rate}%"
-            echo "   ➤ Avg Response Time: ${avg_rt} ms"
-            echo "   ➤ P95 Response Time: ${p95_rt} ms"
-            echo "   ➤ P99 Response Time: ${p99_rt} ms"
-            echo "   ➤ Error Rate: ${error_rate}"
+      function safeGet(obj, pathArray, defaultValue = 0) {
+        return pathArray.reduce((acc, key) => (acc && acc[key] != null ? acc[key] : null), obj) ?? defaultValue;
+      }
 
-            rt_failed=false
-            error_failed=false
+      for (const file of resultFiles) {
 
-            if [ "$(echo "$avg_rt > $THRESHOLD_RESPONSE_TIME" | bc)" -eq 1 ]; then
-                rt_failed=true
-            fi
+        const testName = testNames[resultFiles.indexOf(file)]
+        const data = JSON.parse(fs.readFileSync(file, 'utf8'));
 
-            if [ "$(echo "$error_rate > $THRESHOLD_ERROR_RATE" | bc)" -eq 1 ]; then
-                error_failed=true
-            fi
+        const avgRT = safeGet(data, ['aggregate', 'summaries', 'http.response_time', 'mean']);
+        const p95RT = safeGet(data, ['aggregate', 'summaries', 'http.response_time', 'p95']);
+        const p99RT = safeGet(data, ['aggregate', 'summaries', 'http.response_time', 'p99']);
 
-            if [ "$rt_failed" = true ] || [ "$error_failed" = true ]; then
-                echo "   ❌ FAILED"
-                if [ "$rt_failed" = true ]; then
-                    echo "      - Response time exceeded: ${avg_rt}ms > ${THRESHOLD_RESPONSE_TIME}ms"
-                fi
-                if [ "$error_failed" = true ]; then
-                    echo "      - Error rate exceeded: ${error_rate} > ${THRESHOLD_ERROR_RATE}"
-                fi
-                if [ -z "$failed_tests" ]; then
-                    failed_tests="$test_name"
-                else
-                    failed_tests="$failed_tests $test_name"
-                fi
-                approved=false
-            else
-                echo "   ✅ PASSED"
-            fi
+        const timeoutErrors = safeGet(data, ['aggregate', 'counters', 'errors.ETIMEDOUT']);
+        const totalRequests = safeGet(data, ['aggregate', 'counters', 'http.requests']);
+        const successfulResponses = safeGet(data, ['aggregate', 'counters', 'http.responses']);
+        const failedUsers = safeGet(data, ['aggregate', 'counters', 'vusers.failed']);
 
-            echo ""
-        done
+        const errorRate = totalRequests > 0 ? timeoutErrors / totalRequests : 0;
+        const successRate = totalRequests > 0 ? (successfulResponses * 100) / totalRequests : 0;
 
-        echo "=============================="
-        echo "📋 SUMMARY"
-        echo "=============================="
-        echo "Thresholds:"
-        echo "  - Max Response Time: ${THRESHOLD_RESPONSE_TIME}ms"
-        echo "  - Max Error Rate: $THRESHOLD_ERROR_RATE"
-        echo ""
+        console.log(`📄 Test: ${testName}`);
+        console.log(`   ➤ Total Requests: ${totalRequests}`);
+        console.log(`   ➤ Successful Responses: ${successfulResponses}`);
+        console.log(`   ➤ Failed Users: ${failedUsers}`);
+        console.log(`   ➤ Timeout Errors: ${timeoutErrors}`);
+        console.log(`   ➤ Success Rate: ${successRate.toFixed(2)}%`);
+        console.log(`   ➤ Avg Response Time: ${avgRT} ms`);
+        console.log(`   ➤ P95 Response Time: ${p95RT} ms`);
+        console.log(`   ➤ P99 Response Time: ${p99RT} ms`);
+        console.log(`   ➤ Error Rate: ${errorRate.toFixed(6)}`);
 
-        if [ "$approved" = true ]; then
-            echo "🎉 All tests passed thresholds!"
-            echo "::approved=true"
-            exit 0
-        else
-            echo "❌ Some tests failed!"
-            echo "Failed tests: $failed_tests"
-            echo "::approved=false"
-            exit 1
-        fi
+        const rtFailed = avgRT > THRESHOLD_RESPONSE_TIME;
+        const errorFailed = errorRate > THRESHOLD_ERROR_RATE;
+        const successFailed = successfulResponses === 0;
+        
+        if (rtFailed || errorFailed || successFailed) {
+          console.log(`   ❌ FAILED`);
+          if (rtFailed) {
+            console.log(`      - Response time exceeded: ${avgRT}ms > ${THRESHOLD_RESPONSE_TIME}ms`);
+          }
+          if (errorFailed) {
+            console.log(`      - Error rate exceeded: ${errorRate.toFixed(6)} > ${THRESHOLD_ERROR_RATE}`);
+          }
+          if (successFailed) {
+            console.log(`      - No successful responses received!`);
+          }
+          failedTests.push(testName);
+          approved = false;
+        } else {
+          console.log(`   ✅ PASSED`);
+        }
+
+        console.log('');
+      }
+
+      console.log('==============================');
+      console.log('📋 SUMMARY');
+      console.log('==============================');
+      console.log(`Thresholds:`);
+      console.log(`  - Max Response Time: ${THRESHOLD_RESPONSE_TIME}ms`);
+      console.log(`  - Max Error Rate: ${THRESHOLD_ERROR_RATE}`);
+      console.log('');
+
+      Kestra.outputs(
+        {
+          approved: approved,
+          total_tests: resultFiles.length,
+          failed_tests: failedTests,
+          passed_tests: resultFiles.length - failedTests.length,
+          summary: `Tests failed: ${failedTests.length} out of ${resultFiles.length}`
+        }
+        )
+
+      if (approved) {
+        console.log('🎉 All tests passed thresholds!');
+        console.log('::approved=true');
+        process.exit(0);
+      } else {
+        console.log('❌ Some tests failed!');
+        console.log('Failed tests:', failedTests.join(', '));
+        console.log('::approved=false');
+        process.exit(0);
+      }
+
+  - id: log_summary
+    type: io.kestra.plugin.core.log.Log
+    message:
+      - "🎯 Chaos Test Analysis Complete"
+      - "Approved: {{ outputs.analyze_chaos_results.vars.approved }}"
+      - "Total Tests: {{ outputs.analyze_chaos_results.vars.total_tests }}"
+      - "Passed Tests: {{ outputs.analyze_chaos_results.vars.passed_tests }}"
+      - "Failed Tests: {{ outputs.analyze_chaos_results.vars.failed_tests }}"
+      - "Summary: {{ outputs.analyze_chaos_results.vars.summary }}"
