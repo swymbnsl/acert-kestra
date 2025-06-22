@@ -14,10 +14,6 @@ kubectl delete networkchaos --all
 echo "Stopping Stress Chaos..."
 kubectl delete stresschaos --all
 
-# Stop IO Chaos
-echo "Stopping IO Chaos..."
-kubectl delete iochaos --all
-
 # Verify all chaos resources are removed
 echo "Verifying cleanup..."
 kubectl get podchaos,networkchaos,stresschaos,iochaos

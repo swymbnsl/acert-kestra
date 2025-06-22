@@ -1,100 +1,372 @@
-id: microservice-chaos-test
-namespace: chaos-testing
+id: acert
+namespace: acert
+
+variables:
+  network_chaos: ["network_latency", network_loss]
+  pod_chaos: ["Pod Kill"]
+  stress_chaos: [cpu_stress, memory_stress]
+  modes_needing_values: ["fixed", "fixed-percent", "random-max-percent"]
+
+inputs:
+  - id: github_repo_url
+    type: STRING
+    required: true
+    description: "GitHub repository URL (e.g. https://github.com/user/repo.git)"
+    defaults: https://github.com/swymbnsl/test-microservice.git
+
+  - id: docker_hub_username
+    type: STRING
+    required: true
+    description: "Docker Hub username"
+
+  - id: docker_hub_password
+    type: STRING
+    required: true
+    description: "Docker Hub password"
+
+  - id: chaos_test
+    type: MULTISELECT
+    required: true
+    description: "Select the chaos tests to run on your deployment"
+    values:
+      - pod_kill
+      - network_latency
+      - network_loss
+      - cpu_stress
+      - memory_stress
+
+  - id: network_latency_ms
+    type: INT
+    required: false
+    description: "Network Latency in milliseconds"
+    defaults: 1000
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{inputs.chaos_test contains 'network_latency' }}"
+
+  - id: network_loss_percent
+    type: INT
+    required: false
+    description: "Network Loss percentage"
+    defaults: 25
+    max: 100
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{ inputs.chaos_test contains 'network_loss' }}"
+
+  - id: network_jitter
+    type: INT
+    required: false
+    description: "Jitter in Network Latency (latency ± value)"
+    defaults: 0
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{inputs.chaos_test contains 'network_latency' }}"
+
+  - id: correlation
+    type: INT
+    required: false
+    description: "Correlation: Indicates the correlation between the current latency/loss and the previous one. Range of value: [0, 100]"
+    defaults: 50
+    max: 100
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{inputs.chaos_test contains 'network_latency' or inputs.chaos_test contains 'network_loss'  }}"
+
+  # Stress Test Parameters
+  - id: memory_size
+    type: STRING
+    required: false
+    description: "Memory stress size (e.g., 128MB, 50%)"
+    defaults: "128MB"
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{ inputs.chaos_test contains 'memory_stress' }}"
+
+  - id: memory_workers
+    type: INT
+    required: false
+    description: "Number of memory stress workers"
+    defaults: 1
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{ inputs.chaos_test contains 'memory_stress' }}"
+
+  - id: cpu_workers
+    type: INT
+    required: false
+    description: "Number of CPU Stress workers"
+    defaults: 1
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{ inputs.chaos_test contains 'cpu_stress' }}"
+
+  - id: cpu_load
+    type: INT
+    required: false
+    description: "CPU load percentage"
+    defaults: 80
+    dependsOn:
+      inputs:
+        - chaos_test
+      condition: "{{ inputs.chaos_test contains 'cpu_stress'  }}"
+
+  - id: tests_duration
+    type: INT
+    required: true
+    description: "Duration for all tests (in seconds)"
+    defaults: 30
+
+  - id: chaos_mode
+    type: SELECT
+    required: true
+    description: "Select mode for the tests"
+    values:
+      - one
+      - all
+      - fixed
+      - fixed-percent
+      - random-max-percent
+
+  - id: chaos_mode_value
+    type: STRING
+    required: false
+    description: "Enter Chaos mode value.\nNot applicable for **one** and **all**.\nFor **fixed**: no of pods.\nFor **fixed-percentage**: percentage of pods.\nFor **random-max-percent**: provide a max percentage value to be randomly selected"
+    dependsOn:
+      inputs:
+        - chaos_mode
+      condition: "{{ vars.modes_needing_values contains inputs.chaos_mode }}"
+
+  - id: threshold_error_rate
+    type: FLOAT
+    required: false
+    description: "Maximum acceptable error rate (0.05 = 5%)"
+    defaults: 0.05
+
+  - id: threshold_response_time
+    type: INT
+    required: false
+    description: "Maximum acceptable response time in ms"
+    defaults: 500
+
+  - id: arrival_rate
+    type: INT
+    required: false
+    defaults: 10
+    description: "Number of virtual users increasing per second"
+
+  - id: max_v_users
+    type: INT
+    required: false
+    description: "Maximum number of virtual users (Optional)"
 
 tasks:
-  - id: check_dockerfile
+  - id: wdir
+    type: io.kestra.plugin.core.flow.WorkingDirectory
+    tasks:
+      - id: clone_repository
+        type: io.kestra.plugin.git.Clone
+        url: "{{ inputs.github_repo_url }}"
+        depth: 1
+
+      - id: build_image
+        type: io.kestra.plugin.docker.Build
+        dockerfile: "{{ outputs.clone_repository.directory }}/Dockerfile"
+        tags:
+          - "{{inputs.docker_hub_username}}/test-microservice:latest"
+        pull: true
+        push: true
+        credentials:
+          registry: https://index.docker.io/v1/
+          username: "{{ inputs.docker_hub_username }}"
+          password: "{{ inputs.docker_hub_password }}"
+
+      - id: apply_deployment
+        type: io.kestra.plugin.kubernetes.kubectl.Apply
+        namespace: default
+        spec: |-
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: sample-microservice
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: sample-microservice
+            template:
+              metadata:
+                labels:
+                  app: sample-microservice
+              spec:
+                containers:
+                  - name: sample-microservice
+                    image: "{{inputs.docker_hub_username}}/test-microservice:latest"
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                      - containerPort: 3000
+                    readinessProbe:
+                      httpGet:
+                        path: /health
+                        port: 3000
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+
+      - id: apply_service
+        type: io.kestra.plugin.kubernetes.kubectl.Apply
+        namespace: default
+        spec: |-
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: sample-microservice
+          spec:
+            type: NodePort
+            ports:
+              - port: 3000
+                targetPort: 3000
+                nodePort: 30000
+            selector:
+              app: sample-microservice
+
+  - id: run_each_chaos_test
+    type: io.kestra.plugin.core.flow.ForEach
+    values: "{{inputs.chaos_test}}"
+    tasks:
+      - id: call_general_chaos_sublflow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: acert
+        flowId: general-chaos-test
+        inputs:
+          chaos_type: "{{ taskrun.value }}"
+          chaos_mode: "{{ inputs.chaos_mode }}"
+          chaos_mode_value: "{{ inputs.chaos_mode_value }}"
+          tests_duration: "{{ inputs.tests_duration  }}"
+          cpu_workers: "{{ inputs.cpu_workers }}"
+          cpu_load: "{{ inputs.cpu_load }}"
+          memory_workers: "{{ inputs.memory_workers }}"
+          memory_size: "{{ inputs.memory_size }}"
+          network_latency_ms: "{{ inputs.network_latency_ms }}"
+          network_jitter: "{{ inputs.network_jitter }}"
+          network_loss_percent: "{{ inputs.network_loss_percent }}"
+          correlation: "{{ inputs.correlation }}"
+          artillery_arrival_rate: "{{ inputs.arrival_rate }}"
+
+  - id: evaluate_chaos_results
     type: io.kestra.plugin.scripts.shell.Commands
+    containerImage: alpine:latest
+    inputFiles: |
+      "{{ outputs.call_general_chaos_sublflow.outputs.file }}"
+      "{{ outputs.call_general_chaos_sublflow.outputs.file2 }}"
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      cpu:
+        cpus: 1
+    beforeCommands:
+      - apk add --no-cache jq bc
     commands:
       - |
-        cd /home/swayam/Desktop/Kestra/sample-microservice
-        if [ ! -f Dockerfile ]; then
-          echo "Dockerfile not found"
-          exit 1
-        fi
-        echo "Dockerfile exists"
+        echo "📊 A-CERT Chaos Test Results Analysis"
+        echo "====================================="
 
-  - id: build_docker_image
-    type: io.kestra.plugin.scripts.shell.Commands
-    timeout: PT30M
-    commands:
-      - cd /home/swayam/Desktop/Kestra/sample-microservice
-      - docker build -t sample-microservice:latest .
+        THRESHOLD_RESPONSE_TIME="{{ inputs.threshold_response_time | default(500) }}"
+        THRESHOLD_ERROR_RATE="{{ inputs.threshold_error_rate | default(0.05) }}"
 
-  - id: deploy_to_k8s
-    type: io.kestra.plugin.scripts.shell.Commands
-    commands:
-      - cd /home/swayam/Desktop/Kestra/sample-microservice
-      - kubectl create namespace sample-app --dry-run=client -o yaml | kubectl apply -f -
-      - kubectl apply -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/deployment.yaml
-      - kubectl apply -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/service.yaml
-      - |
-        echo "Waiting for pods to be ready..."
-        kubectl wait --for=condition=ready pod -l app=sample-microservice -n sample-app --timeout=120s
+        approved=true
+        failed_tests=""
 
-  - id: verify_deployment
-    type: io.kestra.plugin.scripts.shell.Commands
-    commands:
-      - |
-        READY=$(kubectl get pods -n sample-app -l app=sample-microservice -o jsonpath='{.items[0].status.containerStatuses[0].ready}')
-        if [ "$READY" != "true" ]; then
-          echo "Deployment not ready"
-          exit 1
-        fi
-        echo "Deployment verified successfully"
+        result_files="baseline-results.json cpu-stress-results.json memory-stress-results.json network-latency-results.json network-loss-results.json pod-kill-results.json"
 
-  - id: run_chaos_tests
-    type: io.kestra.plugin.scripts.shell.Commands
-    commands:
-      - cd /home/swayam/Desktop/Kestra
-      - |
-        # Start monitoring in background
-        ./scripts/chaos-monitor.sh &
-        sleep 30
+        for file in $result_files; do
+            if [ ! -f "$file" ]; then
+                echo "⚠️  Skipping missing file: $file"
+                continue
+            fi
 
-        # Run chaos tests
-        ./manual-chaos-test/manual-acert-testing.sh
+            test_name=$(basename "$file" .json)
 
-        # Store the exit code
-        TEST_EXIT=$?
+            avg_rt=$(jq -r '.aggregate.summaries."http.response_time".mean // 0' "$file")
+            p95_rt=$(jq -r '.aggregate.summaries."http.response_time".p95 // 0' "$file")
+            p99_rt=$(jq -r '.aggregate.summaries."http.response_time".p99 // 0' "$file")
 
-        if [ $TEST_EXIT -ne 0 ]; then
-          echo "Chaos tests failed"
-          exit 1
-        fi
+            timeout_errors=$(jq -r '.aggregate.counters."errors.ETIMEDOUT" // 0' "$file")
+            total_requests=$(jq -r '.aggregate.counters."http.requests" // 0' "$file")
+            successful_responses=$(jq -r '.aggregate.counters."http.responses" // 0' "$file")
+            failed_users=$(jq -r '.aggregate.counters."vusers.failed" // 0' "$file")
 
-  - id: evaluate_results
-    type: io.kestra.plugin.scripts.shell.Commands
-    commands:
-      - cd /home/swayam/Desktop/Kestra
-      - |
-        # Run scoring script and capture output
-        OUTPUT=$(./scripts/chaos-scoring.sh)
-        EXIT_CODE=$?
+            if [ "$total_requests" -gt 0 ]; then
+                error_rate=$(echo "scale=6; $timeout_errors / $total_requests" | bc)
+                success_rate=$(echo "scale=2; $successful_responses * 100 / $total_requests" | bc)
+            else
+                error_rate="0.000000"
+                success_rate="0.00"
+            fi
 
-        echo "$OUTPUT"
+            echo "📄 Test: $test_name"
+            echo "   ➤ Total Requests: $total_requests"
+            echo "   ➤ Successful Responses: $successful_responses"
+            echo "   ➤ Failed Users: $failed_users"
+            echo "   ➤ Timeout Errors: $timeout_errors"
+            echo "   ➤ Success Rate: ${success_rate}%"
+            echo "   ➤ Avg Response Time: ${avg_rt} ms"
+            echo "   ➤ P95 Response Time: ${p95_rt} ms"
+            echo "   ➤ P99 Response Time: ${p99_rt} ms"
+            echo "   ➤ Error Rate: ${error_rate}"
 
-        if [ $EXIT_CODE -eq 0 ]; then
-          echo '::{"outputs":{"test_status":"passed","details":"All tests passed successfully"}}::'
+            rt_failed=false
+            error_failed=false
+
+            if [ "$(echo "$avg_rt > $THRESHOLD_RESPONSE_TIME" | bc)" -eq 1 ]; then
+                rt_failed=true
+            fi
+
+            if [ "$(echo "$error_rate > $THRESHOLD_ERROR_RATE" | bc)" -eq 1 ]; then
+                error_failed=true
+            fi
+
+            if [ "$rt_failed" = true ] || [ "$error_failed" = true ]; then
+                echo "   ❌ FAILED"
+                if [ "$rt_failed" = true ]; then
+                    echo "      - Response time exceeded: ${avg_rt}ms > ${THRESHOLD_RESPONSE_TIME}ms"
+                fi
+                if [ "$error_failed" = true ]; then
+                    echo "      - Error rate exceeded: ${error_rate} > ${THRESHOLD_ERROR_RATE}"
+                fi
+                if [ -z "$failed_tests" ]; then
+                    failed_tests="$test_name"
+                else
+                    failed_tests="$failed_tests $test_name"
+                fi
+                approved=false
+            else
+                echo "   ✅ PASSED"
+            fi
+
+            echo ""
+        done
+
+        echo "=============================="
+        echo "📋 SUMMARY"
+        echo "=============================="
+        echo "Thresholds:"
+        echo "  - Max Response Time: ${THRESHOLD_RESPONSE_TIME}ms"
+        echo "  - Max Error Rate: $THRESHOLD_ERROR_RATE"
+        echo ""
+
+        if [ "$approved" = true ]; then
+            echo "🎉 All tests passed thresholds!"
+            echo "::approved=true"
+            exit 0
         else
-          FAILED_TESTS=$(echo "$OUTPUT" | grep "❌ Tests failed" -A 10)
-          echo '::{"outputs":{"test_status":"failed","details":"'"$FAILED_TESTS"'"}}::'
-          exit 1
+            echo "❌ Some tests failed!"
+            echo "Failed tests: $failed_tests"
+            echo "::approved=false"
+            exit 1
         fi
-
-  - id: cleanup
-    type: io.kestra.plugin.scripts.shell.Commands
-    commands:
-      - cd /home/swayam/Desktop/Kestra
-      - ./scripts/stop-all-tests.sh || true
-      - kubectl delete -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/deployment.yaml --ignore-not-found=true
-      - kubectl delete -f /home/swayam/Desktop/Kestra/sample-microservice/k8s/service.yaml --ignore-not-found=true
-      - kubectl delete -f /home/swayam/Desktop/Kestra/scripts/stop-all-pods-services.yaml --ignore-not-found=true
-    allowFailure: true
-
-outputs:
-  - id: test_status
-    value: "{{ outputs.evaluate_results.vars.test_status }}"
-    type: STRING
-  - id: details
-    value: "{{ outputs.evaluate_results.vars.details }}"
-    type: STRING

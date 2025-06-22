@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   action: delay
-  mode: one
+  mode: all
   selector:
     namespaces:
       - default
