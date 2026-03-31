@@ -1,4 +1,4 @@
-# A-CERT: Advanced Chaos Engineering Resilience Testing
+# A-CERT: Automated Chaos Engineering Resilience Testing
 
 [![Kestra](https://img.shields.io/badge/Kestra-Workflow-blue)](https://kestra.io)
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](https://docker.com)
@@ -24,7 +24,7 @@
 
 ## 🚀 Overview
 
-A-CERT (Advanced Chaos Engineering Resilience Testing) is a sophisticated chaos testing tool built on Kestra workflows that automates the entire process of chaos engineering for microservices. It provides a comprehensive solution for testing application resilience by introducing controlled failures and measuring system behavior under stress.
+A-CERT (Automated Chaos Engineering Resilience Testing) is a sophisticated chaos testing tool built on Kestra workflows that automates the entire process of chaos engineering for microservices. It provides a comprehensive solution for testing application resilience by introducing controlled failures and measuring system behavior under stress.
 
 The tool combines **Chaos Mesh** for chaos injection, **Artillery** for load testing, and **Kubernetes** for container orchestration to deliver enterprise-grade chaos testing capabilities.
 
